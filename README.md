@@ -1,71 +1,39 @@
-[中文](README.zh-CN.md) | [日本語](README.ja.md)
+# SiYuan (Fork) - Android
 
-## Overview
+A community fork of [siyuan-note/siyuan-android](https://github.com/siyuan-note/siyuan-android) building an account-free Android client with third-party sync. For the kernel and frontend changes, see [antebudimir/siyuan](https://github.com/siyuan-note/siyuan).
 
-* Please go to [SiYuan issues](https://github.com/siyuan-note/siyuan/issues) to report issues/consult discussions
-* Code contributions are welcome
+* General SiYuan questions and upstream bugs: [siyuan-note/siyuan issues](https://github.com/siyuan-note/siyuan/issues)
+* Fork-specific problems (sync, build, signing): [open an issue here](https://github.com/antebudimir/siyuan-android/issues)
 
-### Fork notes (antebudimir)
+## Fork notes
 
-This fork builds a community, account-free Android client (`fork` flavor, arm64-v8a only):
-
-* `official` flavor renamed to `fork`; app label `SiYuan Fork`
+* Single `fork` flavor (renamed from upstream `official`), arm64-v8a only, app label `SiYuan Fork`
 * Own version line: `siyuanVersionName` follows the fork tag `X.Y.Z-fork.N`, `siyuanVersionCode` counts independently
 * Aliyun Maven mirrors removed; Google/Maven Central direct
-* Release builds are driven by [.github/workflows/fork-release.yml](.github/workflows/fork-release.yml): it builds the kernel `.aar` (with `fts5 sqlcipher` tags) and frontend `app.zip` from the matching `antebudimir/siyuan` ref, signs with the `ANDROID_KEYSTORE_*` repository secrets, and attaches the APK to the tag's GitHub Release
-* Local builds need `app/libs/kernel.aar`, `app/src/main/assets/app.zip`, and `app/siyuan-android.jks` plus `signings.gradle` (see `signings.templates.gradle`) — none of these are committed
-* For the third-party sync feature, see [antebudimir/siyuan](https://github.com/antebudimir/siyuan)
+* Releases are built by [.github/workflows/fork-release.yml](.github/workflows/fork-release.yml): it builds the kernel `.aar` (with `fts5 sqlcipher` tags - sqlcipher is mandatory on mobile) and frontend `app.zip` from the matching `antebudimir/siyuan` ref, signs with the `ANDROID_KEYSTORE_*` repository secrets, and attaches the APK to the tag's GitHub Release
 
+## Build
 
-[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">](https://f-droid.org/packages/org.b3log.siyuan/)
-[<img src="https://play.google.com/intl/en_us/badges/images/generic/en-play-badge.png" alt="Get it on Google Play" height="80">](https://play.google.com/store/apps/details?id=org.b3log.siyuan)
+### CI (recommended)
 
-## Construction guide
+1. Push the release tag to `antebudimir/siyuan` first (also produces the Docker image and Linux release)
+2. Push the same tag here; `fork-release.yml` does the rest
+3. For a test build without a tag, run the workflow manually via `workflow_dispatch` and download the APK artifact
 
-1. Refer to [SiYuan Development Guide](https://github.com/siyuan-note/siyuan/blob/master/.github/CONTRIBUTING.md) to compile the kernel
-2. Copy the resource files and package it in app/src/main/assets/app.zip
-   * appearance
-   * guide
-   * stage
-   * changelogs
+### Local
+
+1. Compile the kernel and frontend following [antebudimir/siyuan](https://github.com/antebudimir/siyuan), then place:
+   * `kernel.aar` in `app/libs/`
+   * `app.zip` (containing `appearance`, `guide`, `stage`, `changelogs`) in `app/src/main/assets/`
+2. Copy `signings.templates.gradle` to `signings.gradle` and fill in your keystore details; place the keystore at `app/siyuan-android.jks` (never commit it)
+3. Build:
+   ```shell
+   ./gradlew clean assembleForkRelease
+   ```
+   The APK is written to `app/build/outputs/apk/fork/release/siyuan-${versionName}-fork-release.apk`
 
 Directory structure reference:
 
 ![project-tree](project-tree.png)
 
 ![app.zip](app-zip.png)
-
-## About Multi-Channel Software Distribution
-
-If you are building your program using the Android Studio method of going to 【Build】,【Generate Signed Bundle APK...】, you only need to modify the `siyuanVersionName` and `siyuanVersionCode` within the build.gradle file at the project level. After making the changes, you can directly package the app and ignore the following content.
-
-### Steps
-
-**The following content is only necessary when building via the command line console**:
-
-When building using the command line console, you not only need to modify the `siyuanVersionName` and `siyuanVersionCode` within the build.gradle file at the project level, but you also need to perform the following steps:
-
-1. Copy the `signings.templates.gradle` file and rename it to `signings.gradle`.
-2. Configure the related information in `signings.gradle`.
-3. Use the command line to navigate to the root directory of the project and execute the following
-   ```shell
-   # windows
-   .\gradlew clean buildReleaseTask
-   # linux
-   gradle clean buildReleaseTask
-   ```
-   
-   The naming convention is as follows:
-
-   ```txt
-   assemble/bundle  Googleplay  Debug/Release
-   ```
-   
-   `assemble` generates APKs
-   `bundle` generates AABs
-   `Googleplay` is the name of the channel package; refer to the `productFlavors {}` configuration in flavors.gradle for the specified location
-   `Debug/Release` stands for Test version/Official version
-4. After the execution is complete, you can find the generated program at the following location
-   ```txt
-   siyuan-android\app\build-release\siyuan-${versionName}-all
-   ```
