@@ -1,0 +1,158 @@
+name: Fork Android Release
+
+# Fork Android 发布：从 antebudimir/siyuan 的 fork 标签构建内核 .aar 与前端 app.zip，
+# 打包签名 APK 并上传到 GitHub Release。仅保留 fork 单渠道、arm64-v8a。
+
+on:
+  push:
+    tags:
+      - 'v*-fork.*'
+  workflow_dispatch:
+    inputs:
+      siyuan_ref:
+        description: 'antebudimir/siyuan ref to build the kernel from (branch or tag)'
+        required: false
+        default: 'fork'
+
+permissions:
+  contents: write
+
+env:
+  SIYUAN_REPO: antebudimir/siyuan
+  SIYUAN_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.siyuan_ref || github.ref_name }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      GOPATH: ${{ github.workspace }}/go
+    steps:
+      - name: Checkout siyuan-android
+        uses: actions/checkout@v6
+
+      - name: Checkout fork siyuan
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.SIYUAN_REPO }}
+          ref: ${{ env.SIYUAN_REF }}
+          path: ${{ github.workspace }}/go/src/github.com/${{ env.SIYUAN_REPO }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ github.workspace }}/go/src/github.com/${{ env.SIYUAN_REPO }}/kernel/go.mod
+          cache-dependency-path: ${{ github.workspace }}/go/src/github.com/${{ env.SIYUAN_REPO }}/kernel/go.sum
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Build frontend
+        run: |
+          corepack enable
+          corepack install --global pnpm@12.6.0
+          pnpm install --no-frozen-lockfile
+          pnpm run build
+          node scripts/trimChangelogs.js
+        working-directory: ${{ github.workspace }}/go/src/github.com/${{ env.SIYUAN_REPO }}/app
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android NDK
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;28.2.13676358" > /dev/null
+          NDK_DIR="$ANDROID_HOME/ndk/28.2.13676358"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@2553ed8ce294
+          echo "$GOPATH/bin" >> "$GITHUB_PATH"
+          "$GOPATH/bin/gomobile" init
+
+      - name: Build Android kernel (aar)
+        # 移动端内核必须带 sqlcipher（kernel/mobile/sqlcipher_required.go 强制校验），
+        # 否则无法打开加密笔记本；与桌面 fork 构建不同。
+        run: |
+          CGO_ENABLED=1 gomobile bind -tags "fts5 sqlcipher" -ldflags "-s -w" -v \
+            -o kernel.aar -target android/arm64 -androidapi 26 ./mobile/
+        working-directory: ${{ github.workspace }}/go/src/github.com/${{ env.SIYUAN_REPO }}/kernel
+        env:
+          JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
+
+      - name: Prepare build inputs
+        run: |
+          mkdir -p app/libs app/src/main/assets
+          cp "${{ github.workspace }}/go/src/github.com/${{ env.SIYUAN_REPO }}/kernel/kernel.aar" app/libs/kernel.aar
+          cd "${{ github.workspace }}/go/src/github.com/${{ env.SIYUAN_REPO }}/app"
+          zip -r app.zip appearance guide stage $([ -d changelogs ] && echo changelogs) -x 'stage/ocr/runtime/*'
+          zip -j app.zip ../LICENSE ../THIRD_PARTY_NOTICES.md
+          cp app.zip "${{ github.workspace }}/app/src/main/assets/app.zip"
+
+      - name: Inject signing config
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/siyuan-android.jks
+          cat > signings.gradle <<EOF
+          android {
+            signingConfigs {
+              siyuanConfig {
+                storeFile file("siyuan-android.jks")
+                storePassword "$ANDROID_KEYSTORE_PASSWORD"
+                keyAlias "$ANDROID_KEY_ALIAS"
+                keyPassword "$ANDROID_KEY_PASSWORD"
+              }
+            }
+          }
+          EOF
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Build APK
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          chmod +x ./gradlew
+          ./gradlew assembleForkRelease --no-daemon
+
+      - name: Collect APK
+        run: |
+          VERSION=$(sed -nE 's/^[[:space:]]*siyuanVersionName[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' build.gradle)
+          cp "app/build/outputs/apk/fork/release/siyuan-${VERSION}-fork-release.apk" \
+             "siyuan-fork-${VERSION}.apk"
+          sha256sum "siyuan-fork-${VERSION}.apk" > "siyuan-fork-${VERSION}.apk.sha256"
+          echo "APK=siyuan-fork-${VERSION}.apk" >> "$GITHUB_ENV"
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generateReleaseNotes: true
+          artifacts: "${{ env.APK }},${{ env.APK }}.sha256"
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload APK artifact (dispatch builds)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK }}
+          path: |
+            ${{ env.APK }}
+            ${{ env.APK }}.sha256
+          if-no-files-found: error

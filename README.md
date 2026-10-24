@@ -5,6 +5,18 @@
 * Please go to [SiYuan issues](https://github.com/siyuan-note/siyuan/issues) to report issues/consult discussions
 * Code contributions are welcome
 
+### Fork notes (antebudimir)
+
+This fork builds a community, account-free Android client (`fork` flavor, arm64-v8a only):
+
+* `official` flavor renamed to `fork`; app label `SiYuan Fork`
+* Own version line: `siyuanVersionName` follows the fork tag `X.Y.Z-fork.N`, `siyuanVersionCode` counts independently
+* Aliyun Maven mirrors removed; Google/Maven Central direct
+* Release builds are driven by [.github/workflows/fork-release.yml](.github/workflows/fork-release.yml): it builds the kernel `.aar` (with `fts5 sqlcipher` tags) and frontend `app.zip` from the matching `antebudimir/siyuan` ref, signs with the `ANDROID_KEYSTORE_*` repository secrets, and attaches the APK to the tag's GitHub Release
+* Local builds need `app/libs/kernel.aar`, `app/src/main/assets/app.zip`, and `app/siyuan-android.jks` plus `signings.gradle` (see `signings.templates.gradle`) — none of these are committed
+* For the third-party sync feature, see [antebudimir/siyuan](https://github.com/antebudimir/siyuan)
+
+
 [<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">](https://f-droid.org/packages/org.b3log.siyuan/)
 [<img src="https://play.google.com/intl/en_us/badges/images/generic/en-play-badge.png" alt="Get it on Google Play" height="80">](https://play.google.com/store/apps/details?id=org.b3log.siyuan)
 

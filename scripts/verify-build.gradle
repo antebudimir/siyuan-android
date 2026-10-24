@@ -10,7 +10,7 @@ gradle.beforeProject { project ->
         doLast {
             def android = project.extensions.getByName('android')
             def version = project.rootProject.siyuanVersionName
-            def channels = ['cn', 'googleplay', 'huawei', 'official']
+            def channels = ['fork']
             assert variants.collect { it.name }.sort() == channels.collectMany { channel ->
                 ["${channel}Debug".toString(), "${channel}Release".toString()]
             }.sort()
@@ -36,8 +36,7 @@ gradle.beforeProject { project ->
                 def appName = variant.resValues.get().find { entry ->
                     entry.key.type == 'string' && entry.key.name == 'app_name'
                 }.value.value
-                def expectedName = debug ? 'SiYuan-Debug' :
-                        (variant.flavorName in ['cn', 'huawei'] ? '思源笔记' : 'SiYuan')
+                def expectedName = debug ? 'SiYuan-Debug' : 'SiYuan Fork'
                 assert appName == expectedName
                 variant.outputs.each { output ->
                     assert output.versionCode.get() == project.rootProject.siyuanVersionCode

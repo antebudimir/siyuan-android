@@ -1,13 +1,11 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 buildscript {
     ext {
-        siyuanVersionCode = 447
-        siyuanVersionName = "3.8.9-alpha.8"
+        // Fork 版本：siyuanVersionName 跟随 fork 标签（X.Y.Z-fork.N），versionCode 独立递增。
+        siyuanVersionCode = 38001
+        siyuanVersionName = "3.8.8-fork.1"
     }
     repositories {
-        maven { url = 'https://maven.aliyun.com/repository/google' }
-        maven { url = 'https://maven.aliyun.com/repository/public' }
-        maven { url = 'https://maven.aliyun.com/repository/gradle-plugin' }
         google()
         mavenCentral()
     }
@@ -21,11 +19,6 @@ buildscript {
 
 allprojects {
     repositories {
-        // 阿里云 Maven 中央仓库下载源
-        // https://developer.aliyun.com/mvn/guide?spm=a2c6h.13651104.0.0.435836a4Lghjtb
-        maven { url = 'https://maven.aliyun.com/repository/google' }
-        maven { url = 'https://maven.aliyun.com/repository/public' }
-
         google()
         mavenCentral()
         maven { url = 'https://jitpack.io' }

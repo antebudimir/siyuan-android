@@ -35,5 +35,5 @@ tasks.register('buildReleaseTask', Copy) {
   }
 
   // 依赖于构建任务
-  dependsOn 'assembleCnRelease', 'bundleGoogleplayRelease', 'bundleHuaweiRelease', 'assembleOfficialRelease'
+  dependsOn 'assembleForkRelease'
 }
