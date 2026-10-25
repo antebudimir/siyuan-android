@@ -1,6 +1,8 @@
 # SiYuan (Fork) - Android
 
-A community fork of [siyuan-note/siyuan-android](https://github.com/siyuan-note/siyuan-android) building an account-free Android client with third-party sync. For the kernel and frontend changes, see [antebudimir/siyuan](https://github.com/siyuan-note/siyuan).
+> **Fork notice:** This is an unofficial community fork of [siyuan-note/siyuan-android](https://github.com/siyuan-note/siyuan-android), not affiliated with or endorsed by the SiYuan team. It is signed with its own key and built for account-free sync against self-hosted S3/WebDAV; official cloud features still require an upstream SiYuan account. Install releases only from this repository.
+
+A community fork of [siyuan-note/siyuan-android](https://github.com/siyuan-note/siyuan-android) building an account-free Android client with third-party sync. For the kernel and frontend changes, see [antebudimir/siyuan](https://github.com/antebudimir/siyuan).
 
 * General SiYuan questions and upstream bugs: [siyuan-note/siyuan issues](https://github.com/siyuan-note/siyuan/issues)
 * Fork-specific problems (sync, build, signing): [open an issue here](https://github.com/antebudimir/siyuan-android/issues)
