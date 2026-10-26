@@ -21,6 +21,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.KeyguardManager;
+import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ContentValues;
 import android.content.Intent;
@@ -352,7 +353,12 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
             }
             final Uri uri = Uri.parse(url);
             final Intent intent = new Intent(Intent.ACTION_VIEW, uri);
-            startActivity(intent);
+            try {
+                startActivity(intent);
+            } catch (final ActivityNotFoundException e) {
+                // 前端遗留的 blob: 等未知协议无法交给任何界面处理，忽略并记录日志，避免未捕获异常导致应用崩溃
+                Utils.logError("download", "No activity found to handle download url [" + url + "]", e);
+            }
         });
 
         webView.setOnDragListener((v, event) -> {
