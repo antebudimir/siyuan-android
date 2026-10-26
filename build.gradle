@@ -2,8 +2,8 @@
 buildscript {
     ext {
         // Fork 版本：siyuanVersionName 跟随 fork 标签（X.Y.Z-fork.N），versionCode 独立递增。
-        siyuanVersionCode = 38002
-        siyuanVersionName = "3.8.8-fork.1"
+        siyuanVersionCode = 38003
+        siyuanVersionName = "3.8.8-fork.2"
     }
     repositories {
         google()
