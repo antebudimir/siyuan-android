@@ -1,8 +1,10 @@
 # SiYuan (Fork) - Android
 
-> **Fork notice:** This is an unofficial community fork of [siyuan-note/siyuan-android](https://github.com/siyuan-note/siyuan-android), not affiliated with or endorsed by the SiYuan team. It is signed with its own key and built for account-free sync against self-hosted S3/WebDAV; official cloud features still require an upstream SiYuan account. Install releases only from this repository.
+> **⚠️ Fork Notice**: This is my fork of the original [SiYuan](https://github.com/siyuan-note/siyuan) project, not affiliated with or endorsed by the SiYuan team. I's signed with its own key and built for account-free sync against self-hosted S3/WebDAV; official cloud features still require an upstream SiYuan account. Install releases only from this repository.
 
-A community fork of [siyuan-note/siyuan-android](https://github.com/siyuan-note/siyuan-android) building an account-free Android client with third-party sync. For the kernel and frontend changes, see [antebudimir/siyuan](https://github.com/antebudimir/siyuan).
+Android client for antebudimir/siyuan. For the kernel and frontend changes, see that repo.
+
+## Where to report
 
 * General SiYuan questions and upstream bugs: [siyuan-note/siyuan issues](https://github.com/siyuan-note/siyuan/issues)
 * Fork-specific problems (sync, build, signing): [open an issue here](https://github.com/antebudimir/siyuan-android/issues)
@@ -29,9 +31,11 @@ A community fork of [siyuan-note/siyuan-android](https://github.com/siyuan-note/
    * `app.zip` (containing `appearance`, `guide`, `stage`, `changelogs`) in `app/src/main/assets/`
 2. Copy `signings.templates.gradle` to `signings.gradle` and fill in your keystore details; place the keystore at `app/siyuan-android.jks` (never commit it)
 3. Build:
+
    ```shell
    ./gradlew clean assembleForkRelease
    ```
+
    The APK is written to `app/build/outputs/apk/fork/release/siyuan-${versionName}-fork-release.apk`
 
 Directory structure reference:
