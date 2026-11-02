@@ -2,8 +2,9 @@
 buildscript {
     ext {
         // Fork 版本：siyuanVersionName 跟随 fork 标签（X.Y.Z-fork.N），versionCode 独立递增。
-        siyuanVersionCode = 38003
-        siyuanVersionName = "3.8.8-fork.2"
+        // 38004：随上游合并的前端资源变化递增，触发 APK 升级时重新解包前端。
+        siyuanVersionCode = 38004
+        siyuanVersionName = "3.8.8-fork.3"
     }
     repositories {
         google()

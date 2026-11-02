@@ -46,7 +46,6 @@ import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
@@ -78,28 +77,18 @@ import com.blankj.utilcode.util.AppUtils;
 import com.blankj.utilcode.util.BarUtils;
 import com.blankj.utilcode.util.KeyboardUtils;
 import com.blankj.utilcode.util.StringUtils;
-import com.koushikdutta.async.AsyncServer;
 import com.koushikdutta.async.http.AsyncHttpClient;
 import com.koushikdutta.async.http.AsyncHttpPost;
 import com.koushikdutta.async.http.body.JSONObjectBody;
-import com.koushikdutta.async.http.server.AsyncHttpServer;
-import com.koushikdutta.async.util.Charsets;
-import com.zackratos.ultimatebarx.ultimatebarx.java.UltimateBarX;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.io.filefilter.DirectoryFileFilter;
-import org.apache.commons.io.filefilter.TrueFileFilter;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
-import java.lang.reflect.Field;
 import java.net.HttpURLConnection;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -119,8 +108,8 @@ import mobile.Mobile;
 public class MainActivity extends AppCompatActivity implements com.blankj.utilcode.util.Utils.OnAppStatusChangedListener,
         InputManager.InputDeviceListener {
 
-    private AsyncHttpServer server;
     WebView webView;
+    private WebView bootWebView;
     private ImageView bootLogo;
     private ProgressBar bootProgressBar;
     private TextView bootDetailsText;
@@ -158,6 +147,9 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
     private Thread bootProgressMonitorThread;
     private final Handler mainPageWatchdogHandler = new Handler(Looper.getMainLooper());
     private final Runnable mainPageWatchdog = this::handleMainPageWatchdog;
+    private int mainPageReadinessGeneration;
+    private String mainPageStartupStage = "";
+    private Runnable mainPageReadinessPoll;
     private final ActivityResultLauncher<PickVisualMediaRequest> selectImageLauncher = registerForActivityResult(
             new PickVisualMedia(), uri -> completeFileSelection(null == uri ? null : new Uri[]{uri}));
     private final ActivityResultLauncher<PickVisualMediaRequest> selectImagesLauncher = registerForActivityResult(
@@ -172,7 +164,6 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 }
             });
 
-    static int serverPort = 6906;
     static String webViewVer;
     static String userAgent;
 
@@ -260,19 +251,12 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 + "], instance [" + System.identityHashCode(this) + "], task [" + getTaskId()
                 + "], saved state [" + (null != savedInstanceState) + "]");
         setContentView(R.layout.activity_main);
+        SystemBars.configure(this, false);
         registerInputDeviceListener();
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            // Full screen display in landscape mode on Android https://github.com/siyuan-note/siyuan/issues/14448
-            getWindow().getAttributes().layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::goBack);
         }
-
-        // 启动 HTTP Server
-        startHttpServer();
 
         // 初始化 UI 元素
         initUIElements();
@@ -298,13 +282,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
             // 平板上隐藏状态栏 Hide the status bar on tablet https://github.com/siyuan-note/siyuan/issues/12204
             BarUtils.setStatusBarVisibility(this, false);
             Utils.setWebViewFocusable(webView, true);
-        } else {
-            // 沉浸式状态栏设置
-            UltimateBarX.statusBarOnly(this).transparent().light(false).color(Color.parseColor("#1e1e1e")).apply();
-            ((ViewGroup) webView.getParent()).setPadding(0, UltimateBarX.getStatusBarHeight(), 0, 0);
         }
-
-        BarUtils.setNavBarVisibility(this, false);
 
         // Fix https://github.com/siyuan-note/siyuan/issues/9726
         AndroidBug5497Workaround.assistActivity(this);
@@ -451,6 +429,8 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                     mainPageReady = false;
                     bootNavigationCompleted.set(true);
                     view.getSettings().setMediaPlaybackRequiresUserGesture(true);
+                    mainPageStartupStage = "";
+                    scheduleMainPageWatchdog();
                 }
             }
 
@@ -464,11 +444,9 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 }
                 if (isReadyMainPage(url)) {
                     kernelBootCompleted = true;
-                    mainPageReady = true;
                     bootNavigationCompleted.set(true);
                     forceDefaultBootAppearance = false;
                     stopBootProgressMonitor();
-                    cancelMainPageWatchdog();
                 }
                 runOnUiThread(() -> {
                     bootLogo.setVisibility(View.GONE);
@@ -520,7 +498,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         webView.setWebChromeClient(new WebChromeClient() {
             private View mCustomView;
             private WebChromeClient.CustomViewCallback mCustomViewCallback;
-            private int mOriginalSystemUiVisibility;
+            private Runnable restoreSystemBars;
 
             @Override
             public void onShowCustomView(final View view, final WebChromeClient.CustomViewCallback callback) {
@@ -530,25 +508,25 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 }
 
                 mCustomView = view;
-                mOriginalSystemUiVisibility = getWindow().getDecorView().getSystemUiVisibility();
+                restoreSystemBars = SystemBars.hideForVideo(MainActivity.this);
                 mCustomViewCallback = callback;
 
                 final FrameLayout decor = (FrameLayout) getWindow().getDecorView();
                 decor.addView(mCustomView, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
-                getWindow().getDecorView().setSystemUiVisibility(
-                        View.SYSTEM_UI_FLAG_FULLSCREEN |
-                                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
-                                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
             }
 
             @Override
             public void onHideCustomView() {
+                if (mCustomView == null) {
+                    return;
+                }
                 final FrameLayout decor = (FrameLayout) getWindow().getDecorView();
                 decor.removeView(mCustomView);
                 mCustomView = null;
-                getWindow().getDecorView().setSystemUiVisibility(mOriginalSystemUiVisibility);
+                restoreSystemBars.run();
+                restoreSystemBars = null;
                 mCustomViewCallback.onCustomViewHidden();
                 mCustomViewCallback = null;
             }
@@ -670,11 +648,69 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         if (null == webView) {
             return;
         }
-        webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
         mainPageReady = false;
         bootNavigationCompleted.set(false);
         final String safeParameter = forceDefaultBootAppearance ? "&appearance=0" : "";
-        webView.loadUrl(SIYUAN_BOOT_PAGE_URL + safeParameter);
+        if (null == bootWebView) {
+            // 启动页使用独立 WebView，主界面在其下方完成渲染后再切换。
+            bootWebView = new WebView(this);
+            final WebSettings settings = bootWebView.getSettings();
+            settings.setJavaScriptEnabled(true);
+            settings.setDomStorageEnabled(true);
+            settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+            settings.setMediaPlaybackRequiresUserGesture(false);
+            settings.setUserAgentString(webView.getSettings().getUserAgentString());
+            bootWebView.setBackgroundColor(Color.parseColor("#1e1e1e"));
+            bootWebView.setWebViewClient(new WebViewClient() {
+                @Override
+                public boolean shouldOverrideUrlLoading(final WebView view, final WebResourceRequest request) {
+                    if (view != bootWebView || isFinishing()) return true;
+                    if (request.isForMainFrame() && isMainPageNavigation(request.getUrl().toString())) {
+                        kernelBootCompleted = true;
+                        stopBootProgressMonitor();
+                        navigateToMainPage();
+                        return true;
+                    }
+                    return !isBootPage(request.getUrl());
+                }
+
+                @Override
+                public boolean onRenderProcessGone(final WebView view, final RenderProcessGoneDetail detail) {
+                    if (view == bootWebView) removeBootWebView();
+                    return true;
+                }
+
+                @Override
+                public void onReceivedError(final WebView view, final WebResourceRequest request,
+                                            final WebResourceError error) {
+                    if (view != bootWebView || isFinishing() || !request.isForMainFrame()) return;
+                    if (!forceDefaultBootAppearance) {
+                        forceDefaultBootAppearance = true;
+                        view.loadUrl(SIYUAN_BOOT_PAGE_URL + "&appearance=0");
+                    } else {
+                        removeBootWebView();
+                    }
+                }
+            });
+            ((ViewGroup) webView.getParent()).addView(bootWebView, new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        bootWebView.loadUrl(SIYUAN_BOOT_PAGE_URL + safeParameter);
+    }
+
+    private boolean isBootPage(final Uri url) {
+        return SIYUAN_WEBVIEW_SCHEME.equals(url.getScheme()) && SIYUAN_WEBVIEW_HOST.equals(url.getHost())
+                && SIYUAN_WEBVIEW_PORT == url.getPort()
+                && ("/appearance/boot/".equals(url.getPath()) || "/appearance/boot/index.html".equals(url.getPath()));
+    }
+
+    private void removeBootWebView() {
+        if (null == bootWebView) return;
+        final WebView previous = bootWebView;
+        bootWebView = null;
+        if (previous.getParent() instanceof ViewGroup) ((ViewGroup) previous.getParent()).removeView(previous);
+        previous.stopLoading();
+        previous.destroy();
     }
 
     private synchronized void startBootProgressMonitor() {
@@ -779,12 +815,46 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         if (!kernelBootCompleted || isFinishing()) {
             return;
         }
-        mainPageWatchdogHandler.removeCallbacks(mainPageWatchdog);
+        cancelMainPageWatchdog();
         mainPageWatchdogHandler.postDelayed(mainPageWatchdog, MAIN_PAGE_LOAD_TIMEOUT);
+        pollMainPageReadiness(webView, mainPageReadinessGeneration);
     }
 
     private void cancelMainPageWatchdog() {
+        mainPageReadinessGeneration++;
         mainPageWatchdogHandler.removeCallbacks(mainPageWatchdog);
+        if (null != mainPageReadinessPoll) mainPageWatchdogHandler.removeCallbacks(mainPageReadinessPoll);
+        mainPageReadinessPoll = null;
+    }
+
+    private void pollMainPageReadiness(final WebView view, final int generation) {
+        if (view != webView || generation != mainPageReadinessGeneration || isFinishing()) return;
+        view.evaluateJavascript("""
+                ({ready: Boolean(window.siyuan && window.siyuan.isReady) || location.pathname === '/check-auth',
+                  failed: document.documentElement.getAttribute('data-startup-state') === 'failed',
+                  stage: document.documentElement.getAttribute('data-startup-stage') || ''})
+                """, value -> {
+            if (view != webView || generation != mainPageReadinessGeneration || isFinishing()) return;
+            try {
+                final JSONObject status = new JSONObject(value);
+                if (status.optBoolean("ready") || status.optBoolean("failed")) {
+                    mainPageReady = status.optBoolean("ready");
+                    removeBootWebView();
+                    cancelMainPageWatchdog();
+                    return;
+                }
+                final String stage = status.optString("stage");
+                if (!stage.isEmpty() && !stage.equals(mainPageStartupStage)) {
+                    mainPageStartupStage = stage;
+                    mainPageWatchdogHandler.removeCallbacks(mainPageWatchdog);
+                    mainPageWatchdogHandler.postDelayed(mainPageWatchdog, MAIN_PAGE_LOAD_TIMEOUT);
+                }
+            } catch (final Exception ignored) {
+                // 导航或脚本尚未就绪时继续轮询，由启动超时处理无法恢复的页面。
+            }
+            mainPageReadinessPoll = () -> pollMainPageReadiness(view, generation);
+            mainPageWatchdogHandler.postDelayed(mainPageReadinessPoll, 250);
+        });
     }
 
     private void handleMainPageWatchdog() {
@@ -993,83 +1063,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         }
     };
 
-    private void startHttpServer() {
-        if (null != server) {
-            server.stop();
-        }
-
-        try {
-            // 解决乱码问题 https://github.com/koush/AndroidAsync/issues/656#issuecomment-523325452
-            final Class<Charsets> charsetClass = Charsets.class;
-            Field usAscii = charsetClass.getDeclaredField("US_ASCII");
-            usAscii.setAccessible(true);
-            usAscii.set(Charsets.class, Charsets.UTF_8);
-        } catch (final Exception e) {
-            Utils.logError("http", "init charset failed", e);
-        }
-
-        server = new AsyncHttpServer();
-        server.post("/api/walkDir", (request, response) -> {
-            try {
-                final long start = System.currentTimeMillis();
-                final JSONObject requestJSON = (JSONObject) request.getBody().get();
-                final String dir = requestJSON.optString("dir");
-                final JSONObject data = new JSONObject();
-                final JSONArray files = new JSONArray();
-                FileUtils.listFilesAndDirs(new File(dir), TrueFileFilter.INSTANCE, DirectoryFileFilter.DIRECTORY).forEach(file -> {
-                    final String path = file.getAbsolutePath();
-                    final JSONObject info = new JSONObject();
-                    try {
-                        info.put("path", path);
-                        info.put("name", file.getName());
-                        info.put("size", file.length());
-                        info.put("updated", file.lastModified());
-                        info.put("isDir", file.isDirectory());
-                    } catch (final Exception e) {
-                        Utils.logError("http", "walk dir failed", e);
-                    }
-                    files.put(info);
-                });
-                data.put("files", files);
-                final JSONObject responseJSON = new JSONObject().put("code", 0).put("msg", "").put("data", data);
-                response.send(responseJSON);
-                Utils.logInfo("http", "Walk dir [" + dir + "] in [" + (System.currentTimeMillis() - start) + "] ms");
-            } catch (final Exception e) {
-                Utils.logError("http", "walk dir failed", e);
-                try {
-                    response.send(new JSONObject().put("code", -1).put("msg", e.getMessage()));
-                } catch (final Exception e2) {
-                    Utils.logError("http", "walk dir failed", e2);
-                }
-            }
-        });
-
-        serverPort = getAvailablePort();
-        final AsyncServer s = AsyncServer.getDefault();
-        if (Utils.isDebugPackageAndMode(this)) {
-            // 开发环境绑定所有网卡以便调试
-            s.listen(null, serverPort, server.getListenCallback());
-        } else {
-            // 生产环境绑定 ipv6 回环地址 [::1] 以防止被远程访问
-            s.listen(InetAddress.getLoopbackAddress(), serverPort, server.getListenCallback());
-        }
-        Utils.logInfo("http", "HTTP server is listening on port [" + serverPort + "]");
-    }
-
-    private int getAvailablePort() {
-        int ret = 6906;
-        try {
-            ServerSocket s = new ServerSocket(0);
-            ret = s.getLocalPort();
-            s.close();
-        } catch (final Exception e) {
-            Utils.logError("http", "get available port failed", e);
-        }
-        return ret;
-    }
-
     private void bootKernel() {
-        Mobile.setHttpServerPort(MainActivity.serverPort);
         if (Mobile.isHttpServing()) {
             Log.i("kernel", "Kernel HTTP server is running");
             bootIndex();
@@ -1426,7 +1420,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
     public void onForeground(Activity activity) {
         startSyncDataIfReady();
         if (null != webView) {
-            webView.evaluateJavascript("javascript:window.reconnectWebSocket()", null);
+            webView.evaluateJavascript("javascript:typeof window.reconnectWebSocket === 'function' && window.reconnectWebSocket()", null);
         }
     }
 
@@ -1483,6 +1477,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
 
     private void release() {
         cancelMainPageWatchdog();
+        removeBootWebView();
         stopBootProgressMonitor();
         if (null != bootProgressMonitorThread) {
             bootProgressMonitorThread = null;
@@ -1527,15 +1522,6 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
             }
         } catch (final Exception e) {
             Utils.logError("runtime", "destroy webview failed", e);
-        }
-
-        try {
-            if (null != server) {
-                server.stop();
-                server = null;
-            }
-        } catch (final Exception e) {
-            Utils.logError("runtime", "stop http server failed", e);
         }
 
         try {
