@@ -47,6 +47,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.MimeTypeMap;
 import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
@@ -109,6 +110,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         InputManager.InputDeviceListener {
 
     WebView webView;
+    AndroidBug5497Workaround keyboardWorkaround;
     private WebView bootWebView;
     private ImageView bootLogo;
     private ProgressBar bootProgressBar;
@@ -285,7 +287,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         }
 
         // Fix https://github.com/siyuan-note/siyuan/issues/9726
-        AndroidBug5497Workaround.assistActivity(this);
+        keyboardWorkaround = AndroidBug5497Workaround.assistActivity(this);
     }
 
     private void registerInputDeviceListener() {
@@ -425,6 +427,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 if (view != webView) {
                     return;
                 }
+                if (keyboardWorkaround != null) keyboardWorkaround.resetNavigationOverlay();
                 if (isMainPageNavigation(url)) {
                     mainPageReady = false;
                     bootNavigationCompleted.set(true);
@@ -439,6 +442,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 if (view != webView) {
                     return;
                 }
+                if (keyboardWorkaround != null) keyboardWorkaround.enableNavigationOverlay(view);
                 if (null != url && url.contains("/stage/build/")) {
                     appStatusSyncEnabled = true;
                 }
@@ -584,6 +588,13 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 }
 
                 final Intent intent = fileChooserParams.createIntent();
+                final String[] mimeTypes = FileChooserMimeTypes.normalize(fileChooserParams.getAcceptTypes(),
+                        extension -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension));
+                intent.setType(mimeTypes.length == 1 ? mimeTypes[0] : "*/*");
+                intent.removeExtra(Intent.EXTRA_MIME_TYPES);
+                if (mimeTypes.length > 1) {
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+                }
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
                 try {
                     startActivityForResult(intent, REQUEST_SELECT_FILE);

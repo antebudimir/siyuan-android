@@ -1,14 +1,56 @@
 const {test} = require("node:test");
+
+test("standalone assets extract one canonical Lute and expose only its exact editor alias", () => {
+    const runtime = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/markdown/MarkdownRuntime.java"), "utf8");
+    const container = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/MarkdownActivity.java"), "utf8");
+    assert.match(runtime, /name\.equals\("stage\/protyle\/js\/lute\/lute\.min\.js"\)/);
+    assert.match(runtime, /!ready\.isFile\(\) \|\| !parser\.isFile\(\) \|\| legacyParser\.exists\(\)/);
+    assert.match(runtime, /legacyParser\.exists\(\) && !legacyParser\.delete\(\)/);
+    assert.match(runtime, /ready\.exists\(\) && !ready\.delete\(\)/);
+    assert.ok(runtime.indexOf("!ready.delete()") < runtime.indexOf('context.getAssets().open("app.zip")'));
+    assert.match(container, /"\/stage\/build\/markdown\/vditor\/dist\/js\/lute\/lute\.min\.js"\.equals\(uri\.getEncodedPath\(\)\)/);
+    assert.match(container, /uri\.buildUpon\(\)\.path\("\/stage\/protyle\/js\/lute\/lute\.min\.js"\)\.build\(\)/);
+    assert.ok(container.indexOf('!trusted(uri)') < container.indexOf('uri = uri.buildUpon()'));
+    assert.ok(container.indexOf('!uri.getPath().startsWith("/stage/build/markdown/")') < container.indexOf('uri = uri.buildUpon()'));
+});
 const assert = require("node:assert/strict");
 const {mkdtempSync, rmSync, readFileSync} = require("node:fs");
 const {execFileSync} = require("node:child_process");
 const {join, dirname, resolve} = require("node:path");
 const {tmpdir} = require("node:os");
 
+test("Markdown home storage is excluded from legacy backup, cloud backup and device transfer", () => {
+    const source = file => readFileSync(join(__dirname, "../app/src/main", file), "utf8");
+    const manifest = source("AndroidManifest.xml");
+    assert.match(manifest, /android:fullBackupContent="@xml\/backup_rules"/);
+    assert.match(manifest, /android:dataExtractionRules="@xml\/data_extraction_rules"/);
+    const exclusion = /<exclude domain="external" path="home\/\.config\/siyuan\/markdown\/"\s*\/>/;
+    assert.match(source("res/xml/backup_rules.xml"), exclusion);
+    const rules = source("res/xml/data_extraction_rules.xml");
+    for (const section of ["cloud-backup", "device-transfer"]) {
+        assert.match(rules.match(new RegExp(`<${section}>([\\s\\S]*?)</${section}>`))[1], exclusion);
+    }
+    const paths = source("java/org/b3log/siyuan/markdown/MarkdownPaths.java");
+    assert.match(paths, /context\.getExternalFilesDir\(null\)/);
+    assert.match(paths, /"home\/\.config\/siyuan\/markdown"/);
+    const container = source("java/org/b3log/siyuan/MarkdownActivity.java");
+    assert.match(container, /new File\(MarkdownPaths\.directory\(this\), "tree-view\.json"\)/);
+    assert.doesNotMatch(paths + container, /markdown-v1/);
+});
+
+test("network image requests retain CSP, native origin ownership and top-level navigation restrictions", () => {
+    const container = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/MarkdownActivity.java"), "utf8");
+    assert.match(container, /img-src [^;]*http: https:/);
+    assert.match(container, /connect-src 'none'; object-src 'none'; frame-src 'none'/);
+    assert.match(container, /!request\.isForMainFrame\(\)[\s\S]*uri\.getUserInfo\(\) == null[\s\S]*!"siyuan-markdown\.local"\.equals\(uri\.getHost\(\)\)\) return null/);
+    assert.match(container, /setMixedContentMode\(WebSettings\.MIXED_CONTENT_ALWAYS_ALLOW\)/);
+    assert.match(container, /return !request\.isForMainFrame\(\) \|\| !PAGE\.equals\(request\.getUrl\(\)\.toString\(\)\)/);
+});
+
 test("native Markdown encoding, routing, session reservation, image types and draft storage", () => {
     const output = mkdtempSync(join(tmpdir(), "siyuan-markdown-core-"));
     try {
-        const sources = ["MarkdownCodec", "MarkdownRegistry", "MarkdownStore", "MarkdownRouting", "MarkdownImages", "MarkdownImageImport"].map(name =>
+        const sources = ["MarkdownTheme", "MarkdownIds", "MarkdownCodec", "MarkdownRegistry", "MarkdownStore", "MarkdownRouting", "MarkdownImages", "MarkdownImageImport"].map(name =>
             join(__dirname, "../app/src/main/java/org/b3log/siyuan/markdown", name + ".java"));
         sources.push(join(__dirname, "../app/src/test/java/org/b3log/siyuan/markdown/MarkdownCoreTest.java"));
         execFileSync("javac", ["-encoding", "UTF-8", "-d", output, ...sources], {windowsHide: true});
@@ -42,7 +84,7 @@ test("lightweight process has separate WebView storage and retains original URI 
     assert.match(boot, /markdown\.addFlags\(Intent\.FLAG_ACTIVITY_NEW_TASK\)/);
     const container = source("java/org/b3log/siyuan/MarkdownActivity.java");
     assert.match(container, /!App\.isMarkdownWebViewReady\(\)/);
-    assert.doesNotMatch(container, /\bmobile\.Mobile\.|\bMobile\.exit\(/);
+    assert.doesNotMatch(container, /\b(?:mobile\.)?Mobile\.(?:startKernel\w*|exit)\(/);
     assert.doesNotMatch(container, /addJavascriptInterface\(/);
     assert.match(container, /!isMainFrame \|\| !trusted\(sourceOrigin\)/);
     assert.match(container, /setDomStorageEnabled\(false\)/);
@@ -74,4 +116,44 @@ test("system generic MIME routing accepts opaque document IDs then rejects non-M
     const boot = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/BootActivity.java"), "utf8");
     assert.match(boot, /MarkdownRouting\.genericDocument/);
     assert.match(boot, /setMessage\(R\.string\.markdown_unsupported\)/);
+});
+
+test("native Markdown paints its saved appearance before loading only the trusted themed page", () => {
+    const source = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/MarkdownActivity.java"), "utf8");
+    assert.match(source, /if \(PAGE\.equals\(uri\.toString\(\)\)\)/);
+    assert.match(source, /MarkdownCodec\.read\(input, 1024 \* 1024\)/);
+    assert.match(source, /MarkdownTheme\.page\(html, effectiveDark\(\)\)/);
+    assert.ok(source.indexOf("web.setBackgroundColor(surfaceColor())") < source.indexOf("setContentView(frame)"));
+    assert.match(source, /getWindow\(\)\.setBackgroundDrawable\(new ColorDrawable\(background\)\)/);
+    assert.match(source, /if \(web != null\) web\.setBackgroundColor\(background\)/);
+});
+
+
+test("font query is queued on the IO executor and advertises its bridge capability", () => {
+    const container = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/MarkdownActivity.java"), "utf8");
+    const host = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/markdown/MarkdownHost.java"), "utf8");
+    assert.ok(container.indexOf("IO.execute(() ->", container.indexOf("long requestEpoch")) < container.indexOf('case "system-fonts"'));
+    assert.match(container, /mobile\.Mobile\.getSysFonts\(\)/);
+    assert.match(host, /put\("capabilities", new JSONObject\(\)\.put\("systemFonts", true\)/);
+    assert.match(host, /validateFonts\(patch\.getJSONObject\("fonts"\)\)/);
+});
+
+
+test("workspace appearance uses trusted native roots and persists resolver output before exposing it", () => {
+    const host = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/markdown/MarkdownHost.java"), "utf8");
+    assert.match(host, /getExternalFilesDir\(null\)/);
+    assert.match(host, /newMarkdownAppearance\(MarkdownPaths\.directory\(context\)\.getAbsolutePath\(\), base\.getAbsolutePath\(\)\)/);
+    assert.match(host, /put\("workspaceAppearance", appearanceResolver != null\)/);
+    const method = host.slice(host.indexOf("public JSONObject appearance("), host.indexOf("public byte[] readAppearanceFont("));
+    assert.ok(method.indexOf('preferencesStore.put("preferences"') < method.indexOf('result.getJSONObject("appearance")'));
+    assert.match(method, /put\("url", "https:\/\/siyuan-markdown.local\/appearance-font\/" \+ sessionId/);
+    assert.doesNotMatch(method, /put\("theme", appearanceTheme/);
+    const activity = readFileSync(join(__dirname, "../app/src/main/java/org/b3log/siyuan/MarkdownActivity.java"), "utf8");
+    assert.match(activity, /case "appearance":/);
+    assert.ok(activity.indexOf('!trusted(uri)') < activity.indexOf('uri.getPath().startsWith("/appearance-font/")'));
+    assert.match(activity, /current != host \|\| current.closed/);
+    assert.match(host, /resolver != appearanceResolver \|\| epoch != appearanceEpoch \|\| !appearanceTokens.contains\(token\)/);
+    assert.match(host, /appearanceTokens.clear\(\)/);
+    assert.match(host, /\[a-f0-9\]\{48\}/);
+    assert.match(host, /closed = true; closeAppearance\(\);/);
 });

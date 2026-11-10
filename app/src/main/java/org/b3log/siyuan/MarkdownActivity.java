@@ -4,6 +4,8 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.DocumentsContract;
@@ -27,8 +29,11 @@ import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
 import org.b3log.siyuan.markdown.MarkdownCodec;
+import org.b3log.siyuan.markdown.MarkdownTheme;
+import org.b3log.siyuan.markdown.MarkdownIds;
 import org.b3log.siyuan.markdown.MarkdownFiles;
 import org.b3log.siyuan.markdown.MarkdownHost;
+import org.b3log.siyuan.markdown.MarkdownPaths;
 import org.b3log.siyuan.markdown.MarkdownRegistry;
 import org.b3log.siyuan.markdown.MarkdownRuntime;
 import org.b3log.siyuan.markdown.MarkdownRouting;
@@ -50,7 +55,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -63,6 +67,7 @@ public final class MarkdownActivity extends AppCompatActivity {
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
     private final ExecutorService treeIO = Executors.newSingleThreadExecutor();
     private WebView web;
+    private TextView loading;
     private volatile MarkdownHost host;
     private MarkdownTree tree;
     private MarkdownTreeFiles treeFiles;
@@ -73,7 +78,7 @@ public final class MarkdownActivity extends AppCompatActivity {
     private File runtime;
     private JSONObject languages = new JSONObject();
     private String language = "en";
-    private String preferredTheme = "system";
+    private volatile String preferredTheme = "system";
     private JavaScriptReplyProxy replyProxy;
     private final Map<String, Runnable> commands = new ConcurrentHashMap<>();
     private final Map<String, Resource> resources = new ConcurrentHashMap<>();
@@ -88,7 +93,8 @@ public final class MarkdownActivity extends AppCompatActivity {
     private Uri imageSource;
     private Uri imageDirectory;
     private String imageName;
-    private final String activityLease = UUID.randomUUID().toString();
+    private final String activityLease = MarkdownIds.newId();
+    private boolean activityLeaseAttached;
     private final ActivityResultLauncher<Intent> picker = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
         String action = pickerAction, request = pickerRequest;
         JSONObject format = pickerFormat;
@@ -180,9 +186,15 @@ public final class MarkdownActivity extends AppCompatActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        MarkdownRegistry.INSTANCE.attach(activityLease);
         SystemBars.configure(this, !dark());
-        TextView loading = new TextView(this); loading.setText("SiYuan"); setContentView(loading); SystemBars.fitContent(this);
+        loading = new TextView(this); setContentView(loading); SystemBars.fitContent(this); updateSystemBars();
+        try {
+            MarkdownRegistry.INSTANCE.attach(activityLease);
+            activityLeaseAttached = true;
+        } catch (IOException error) {
+            showFailure();
+            return;
+        }
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() { closeEditor(); }
         });
@@ -193,9 +205,10 @@ public final class MarkdownActivity extends AppCompatActivity {
                 loadLanguages();
                 host = new MarkdownHost(this);
                 treeFiles = new MarkdownTreeFiles(this);
-                tree = new MarkdownTree(treeFiles, new MarkdownTreeView(new File(getNoBackupFilesDir(), "markdown-v1/tree-view.json")));
+                tree = new MarkdownTree(treeFiles, new MarkdownTreeView(new File(MarkdownPaths.directory(this), "tree-view.json")));
                 treeSwitch = new MarkdownTreeSwitch(() -> new MarkdownHost(this), MarkdownRegistry.INSTANCE);
-                preferredTheme = host.preferences(null).optString("theme", "system");
+                preferredTheme = host.appearance(null).getString("theme");
+                runOnUiThread(() -> { if (!destroyed) updateSystemBars(); });
                 if (isMarkdownIntent(this, getIntent())) host.open(getIntent().getData(), getIntent().getFlags());
                 updateTreeTarget(true);
                 if (!destroyed) runOnUiThread(this::loadEditor);
@@ -217,13 +230,15 @@ public final class MarkdownActivity extends AppCompatActivity {
         if (isFinishing() || isDestroyed()) return;
         if (!App.isMarkdownWebViewReady() || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) { showFailure(); return; }
         web = new WebView(this);
+        web.setBackgroundColor(surfaceColor());
         WebSettings settings = web.getSettings();
         // The standalone adapter also masks the localStorage API before Vditor starts.
         // Content and preferences have a single native persistence authority.
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(false);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
         settings.setAllowFileAccessFromFileURLs(false); settings.setAllowUniversalAccessFromFileURLs(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        // 网络子资源由页面 CSP 限定为图片，HTTP 图片与 HTTPS 图片使用相同的预览入口。
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         settings.setSupportMultipleWindows(false); settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setSafeBrowsingEnabled(true);
         WebViewAssetLoader loader = new WebViewAssetLoader.Builder().setDomain("siyuan-markdown.local")
@@ -232,7 +247,21 @@ public final class MarkdownActivity extends AppCompatActivity {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return !request.isForMainFrame() || !PAGE.equals(request.getUrl().toString()); }
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
-                if (!"GET".equals(request.getMethod()) || !trusted(uri)) return denied();
+                if (!"GET".equals(request.getMethod())) return denied();
+                if (!trusted(uri)) {
+                    if (!request.isForMainFrame() && ("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) &&
+                            uri.getUserInfo() == null && !"siyuan-markdown.local".equals(uri.getHost())) return null;
+                    return denied();
+                }
+                if (uri.getPath() != null && uri.getPath().startsWith("/appearance-font/")) {
+                    MarkdownHost current = host;
+                    try {
+                        if (current == null) return denied();
+                        byte[] bytes = current.readAppearanceFont(uri.toString());
+                        if (current != host || current.closed) return denied();
+                        return response("application/octet-stream", new ByteArrayInputStream(bytes));
+                    } catch (Exception error) { return denied(); }
+                }
                 if (uri.getPath() != null && uri.getPath().startsWith("/resource/")) {
                     Resource resource = resources.get(uri.toString());
                     MarkdownHost current = host;
@@ -245,12 +274,22 @@ public final class MarkdownActivity extends AppCompatActivity {
                     } catch (Exception error) { return denied(); }
                 }
                 if (uri.getPath() == null || !uri.getPath().startsWith("/stage/build/markdown/")) return denied();
+                // Only this bundled script aliases outside the editor's asset root.
+                if ("/stage/build/markdown/vditor/dist/js/lute/lute.min.js".equals(uri.getEncodedPath())) {
+                    uri = uri.buildUpon().path("/stage/protyle/js/lute/lute.min.js").build();
+                }
                 WebResourceResponse result = loader.shouldInterceptRequest(uri);
                 if (result == null) return denied();
+                if (PAGE.equals(uri.toString())) {
+                    try (InputStream input = result.getData()) {
+                        String html = new String(MarkdownCodec.read(input, 1024 * 1024), StandardCharsets.UTF_8);
+                        result.setData(new ByteArrayInputStream(MarkdownTheme.page(html, effectiveDark()).getBytes(StandardCharsets.UTF_8)));
+                    } catch (Exception error) { return denied(); }
+                }
                 Map<String, String> headers = new HashMap<>();
                 headers.put("X-Content-Type-Options", "nosniff");
                 headers.put("Cache-Control", "no-store");
-                headers.put("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'");
+                headers.put("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'");
                 result.setResponseHeaders(headers);
                 return result;
             }
@@ -292,7 +331,16 @@ public final class MarkdownActivity extends AppCompatActivity {
     }
     private static JSONObject object(String key, Object value) { try { return new JSONObject().put(key, value); } catch (Exception error) { throw new IllegalStateException(error); } }
     private boolean dark() { return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES; }
-    private void updateSystemBars() { SystemBars.setAppearance(this, !("dark".equals(preferredTheme) || "system".equals(preferredTheme) && dark())); }
+    private boolean effectiveDark() { return MarkdownTheme.dark(preferredTheme, dark()); }
+    private int surfaceColor() { return effectiveDark() ? Color.rgb(30, 30, 30) : Color.WHITE; }
+    private void updateSystemBars() {
+        SystemBars.setAppearance(this, !effectiveDark());
+        int background = surfaceColor();
+        getWindow().setBackgroundDrawable(new ColorDrawable(background));
+        findViewById(android.R.id.content).setBackgroundColor(background);
+        if (loading != null) { loading.setBackgroundColor(background); loading.setTextColor(effectiveDark() ? Color.WHITE : Color.BLACK); }
+        if (web != null) web.setBackgroundColor(background);
+    }
     private String label(String key) {
         if (languages.has(key)) return languages.optString(key);
         // Startup failures can precede extraction of the shared language bundle.
@@ -366,10 +414,17 @@ public final class MarkdownActivity extends AppCompatActivity {
                     if (host.generation != generation) { resources.clear(); resourceReferences.clear(); if (!treePreparing) updateTreeTarget(true); }
                 }
                 else switch (action) {
-                    case "bootstrap": result = host.bootstrap(languages, language, dark()); break;
+                    case "system-fonts": result = new org.json.JSONArray(mobile.Mobile.getSysFonts()); break;
+                    case "bootstrap":
+                        result = host.bootstrap(languages, language, dark());
+                        preferredTheme = host.appearanceTheme(); runOnUiThread(this::updateSystemBars); break;
+                    case "appearance":
+                        if (payload != null && payload != JSONObject.NULL && !(payload instanceof JSONObject)) throw new IOException("protocol");
+                        result = host.appearance(payload instanceof JSONObject ? (JSONObject) payload : null);
+                        preferredTheme = host.appearanceTheme(); runOnUiThread(this::updateSystemBars); break;
                     case "preferences": {
                         JSONObject preferences = host.preferences((JSONObject) payload);
-                        preferredTheme = preferences.optString("theme", "system");
+                        preferredTheme = host.appearance(null).getString("theme");
                         runOnUiThread(this::updateSystemBars);
                         result = preferences; break;
                     }
@@ -448,6 +503,7 @@ public final class MarkdownActivity extends AppCompatActivity {
                     MarkdownHost next = treeSwitch.commit(ticket, host);
                     if (next != host) {
                         host = next; switchEpoch++; resources.clear(); resourceReferences.clear(); commands.clear(); closing = false;
+                        preferredTheme = host.appearanceTheme(); runOnUiThread(this::updateSystemBars);
                         ReplyToken token = replies.get(id); if (token != null) token.documentEpoch = switchEpoch;
                         updateTreeTarget(false);
                     }
@@ -502,7 +558,7 @@ public final class MarkdownActivity extends AppCompatActivity {
             String mime = MarkdownFiles.imageMime(reference.split("[?#]", 2)[0]);
             if (mime == null) return JSONObject.NULL;
             Uri uri = host.files.resource(host.resourceTree, reference);
-            String url = ORIGIN + "/resource/" + host.sessionId + "/" + UUID.randomUUID();
+            String url = ORIGIN + "/resource/" + host.sessionId + "/" + MarkdownIds.token();
             resources.put(url, new Resource(uri, mime, host, false));
             resourceReferences.put(host.sessionId + ":" + reference, url);
             return url;
@@ -578,7 +634,7 @@ public final class MarkdownActivity extends AppCompatActivity {
             @Override public boolean same(Uri first, Uri second) { return first.getAuthority().equals(second.getAuthority()) && DocumentsContract.getDocumentId(first).equals(DocumentsContract.getDocumentId(second)); }
         });
         String reference = Uri.encode(leaf);
-        String url = ORIGIN + "/resource/" + host.sessionId + "/" + UUID.randomUUID();
+        String url = ORIGIN + "/resource/" + host.sessionId + "/" + MarkdownIds.token();
         resources.put(url, new Resource(destination, MarkdownFiles.imageMime(leaf), host, true));
         resourceReferences.put(host.sessionId + ":" + reference, url);
         return object("kind", "inserted").put("reference", reference);
@@ -618,7 +674,8 @@ public final class MarkdownActivity extends AppCompatActivity {
             });
             return;
         }
-        String id = UUID.randomUUID().toString();
+        String id = MarkdownIds.newId();
+        if (commands.containsKey(id)) { closing = false; showFailure(); return; }
         if (accepted != null) commands.put(id, accepted);
         try { replyProxy.postMessage(object("type", "command").put("command", object("id", id).put("type", type).put("dark", dark())).toString()); }
         catch (Exception error) { commands.remove(id); closing = false; }
@@ -692,12 +749,14 @@ public final class MarkdownActivity extends AppCompatActivity {
             try {
                 if (treeSwitch != null) treeSwitch.drain();
                 if (previous != null && !previous.closed) MarkdownRegistry.INSTANCE.detach(previous.sessionId);
-                MarkdownRegistry.INSTANCE.detach(activityLease);
+                if (activityLeaseAttached) MarkdownRegistry.INSTANCE.detach(activityLease);
             } catch (Exception ignored) {
                 // I/O tasks ahead of this callback have drained. Keep their claims,
                 // but expose durable drafts as crashed recoveries to a new container.
                 if (previous != null) MarkdownRegistry.INSTANCE.abandonCrashed(previous.sessionId);
-                MarkdownRegistry.INSTANCE.abandonCrashed(activityLease);
+                if (activityLeaseAttached) MarkdownRegistry.INSTANCE.abandonCrashed(activityLease);
+            } finally {
+                if (previous != null) previous.closeAppearance();
             }
         });
         // Its :markdown process owns no kernel and never invokes Mobile.exit.
