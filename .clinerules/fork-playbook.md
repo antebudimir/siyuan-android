@@ -123,3 +123,20 @@ explicitly and do NOT push until CI runs green. (Environment: SDK at
 After each successful sync, append the per-file classification table
 (file → fork-diff summary → policy) here, so the next merge starts from
 recorded reality instead of rediscovering diffs.
+
+### 2026-11-21: Merge upstream/main (v3.9.0-alpha.1)
+
+| File | Fork Diff Summary | Policy |
+|------|-------------------|--------|
+| `build.gradle` | Changed versionCode 476→38007, versionName "3.8.11-alpha.1"→"3.8.11-fork.1", removed Aliyun Maven mirrors | Fork-supersede |
+| `app/src/main/AndroidManifest.xml` | No fork changes | Neutral (auto-merged) |
+
+**Resolution:**
+- `build.gradle`: Kept fork versioning and Aliyun removal; upstream only changed version numbers which fork doesn't adopt
+- `AndroidManifest.xml`: Auto-merged upstream change (Wi-Fi hardware optional)
+
+**Result:**
+- Merge commit: ba121ba
+- Version-alignment commit: d00844f (3.8.11-fork.2, versionCode 38008)
+- All gates passed (24 tests, gradle tasks)
+- Backup branch: `backup/fork-before-upstream-merge-2026-11-21`
